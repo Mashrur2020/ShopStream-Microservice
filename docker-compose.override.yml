@@ -1,0 +1,18 @@
+# ============================================================
+# ShopStream — Development Overrides
+# Auto-loaded by `docker compose up` (no -f flag needed).
+# Adds local debugging ports + hot-reload scaffolding.
+# ============================================================
+
+services:
+
+  # ---------- MongoDB (debug access on host port 27018) ----------
+  mongodb:
+    ports:
+      - "27018:27017"
+
+  # ---------- Dev overrides added per service in later phases ----------
+  # user-service:      bind-mount ./src + nodemon
+  # product-service:   bind-mount ./src + nodemon
+  # order-service:     bind-mount ./src + nodemon
+  # inventory-service: bind-mount ./src + nodemon

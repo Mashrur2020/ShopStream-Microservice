@@ -1,0 +1,180 @@
+# ============================================================
+# ShopStream — E-commerce Microservices
+# Base orchestration file (shared by dev & prod)
+# ============================================================
+
+services:
+
+  # ============================================================
+  # DATABASES
+  # ============================================================
+
+  # ---------- PostgreSQL (User + Inventory) ----------
+  postgres:
+    image: postgres:15-alpine
+    container_name: shopstream-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: admin
+      POSTGRES_PASSWORD: admin123
+      POSTGRES_DB: shopstream
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U admin -d shopstream"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    networks:
+      - shopstream-net
+
+  # ---------- MongoDB (Product + Order) ----------
+  mongodb:
+    image: mongo:6
+    container_name: shopstream-mongodb
+    restart: unless-stopped
+    # No host port in base file: host 27017 may be taken by another project.
+    # Services reach Mongo via Docker DNS: mongodb:27017
+    # Dev override re-publishes it as 27018 for local debugging.
+    volumes:
+      - mongo_data:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping').ok"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    networks:
+      - shopstream-net
+
+  # ============================================================
+  # MICROSERVICES
+  # ============================================================
+
+  # ---------- User Service (Port 3001) ----------
+  user-service:
+    build:
+      context: ./user-service
+      dockerfile: Dockerfile
+    container_name: shopstream-user-service
+    restart: unless-stopped
+    ports:
+      - "3001:3001"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      NODE_ENV: production
+      PORT: 3001
+      DATABASE_URL: postgresql://admin:admin123@postgres:5432/shopstream?schema=user_service
+      JWT_SECRET: supersecretkey-change-in-production
+    networks:
+      - shopstream-net
+
+  # ---------- Product Service (Port 3002) ----------
+  product-service:
+    build:
+      context: ./product-service
+      dockerfile: Dockerfile
+    container_name: shopstream-product-service
+    restart: unless-stopped
+    ports:
+      - "3002:3002"
+    depends_on:
+      mongodb:
+        condition: service_healthy
+      inventory-service:
+        condition: service_started
+    environment:
+      NODE_ENV: production
+      PORT: 3002
+      MONGO_URL: mongodb://mongodb:27017/productdb
+      INVENTORY_SERVICE_URL: http://inventory-service:3004
+    networks:
+      - shopstream-net
+
+  # ---------- Order Service (Port 3003) ----------
+  order-service:
+    build:
+      context: ./order-service
+      dockerfile: Dockerfile
+    container_name: shopstream-order-service
+    restart: unless-stopped
+    ports:
+      - "3003:3003"
+    depends_on:
+      mongodb:
+        condition: service_healthy
+      inventory-service:
+        condition: service_started
+    environment:
+      NODE_ENV: production
+      PORT: 3003
+      MONGO_URL: mongodb://mongodb:27017/orderdb
+      INVENTORY_SERVICE_URL: http://inventory-service:3004
+    networks:
+      - shopstream-net
+
+  # ---------- Inventory Service (Port 3004) ----------
+  inventory-service:
+    build:
+      context: ./inventory-service
+      dockerfile: Dockerfile
+    container_name: shopstream-inventory-service
+    restart: unless-stopped
+    ports:
+      - "3004:3004"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      NODE_ENV: production
+      PORT: 3004
+      DATABASE_URL: postgresql://admin:admin123@postgres:5432/shopstream?schema=inventory_service
+    networks:
+      - shopstream-net
+
+  # ============================================================
+  # API GATEWAY
+  # ============================================================
+
+  # ---------- API Gateway (Port 3000) ----------
+  api-gateway:
+    build:
+      context: ./api-gateway
+      dockerfile: Dockerfile
+    container_name: shopstream-api-gateway
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    depends_on:
+      - user-service
+      - product-service
+      - order-service
+      - inventory-service
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+    networks:
+      - shopstream-net
+
+# ============================================================
+# NETWORKS
+# ============================================================
+
+networks:
+  shopstream-net:
+    driver: bridge
+
+# ============================================================
+# VOLUMES
+# ============================================================
+
+volumes:
+  postgres_data:
+    driver: local
+  mongo_data:
+    driver: local
