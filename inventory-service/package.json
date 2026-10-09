@@ -1,0 +1,22 @@
+{
+  "name": "inventory-service",
+  "version": "1.0.0",
+  "description": "Stock level management with atomic ACID deduction",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "nodemon src/index.js"
+  },
+  "dependencies": {
+    "@prisma/client": "^5.19.1",
+    "express": "^4.19.2",
+    "morgan": "^1.10.0",
+    "prisma": "^5.19.1"
+  },
+  "devDependencies": {
+    "nodemon": "^3.1.4"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
