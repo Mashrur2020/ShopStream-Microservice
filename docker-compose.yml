@@ -36,9 +36,9 @@ services:
     image: mongo:6
     container_name: shopstream-mongodb
     restart: unless-stopped
-    # No host port in base file: host 27017 may be taken by another project.
-    # Services reach Mongo via Docker DNS: mongodb:27017
-    # Dev override re-publishes it as 27018 for local debugging.
+    # No host port: services reach Mongo via Docker DNS (mongodb:27017),
+    # and host 27017 may be taken by other projects.
+    # For host access, temporarily add: ports: ["27017:27017"]
     volumes:
       - mongo_data:/data/db
     healthcheck:

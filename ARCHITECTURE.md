@@ -461,9 +461,7 @@ If you deduct stock for 3 items and the 3rd fails, items 1 and 2 must be restore
 ```
 shopstream-node/
 ├── ARCHITECTURE.md               ← This file
-├── docker-compose.yml            ← Base orchestration
-├── docker-compose.override.yml   ← Dev overrides (hot reload)
-├── docker-compose.prod.yml       ← Prod overrides (resource limits)
+├── docker-compose.yml            ← Orchestration (dev & prod)
 ├── .env.example                  ← Sample env variables
 │
 ├── api-gateway/
