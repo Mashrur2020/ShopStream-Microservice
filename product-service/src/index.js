@@ -4,6 +4,12 @@ const mongoose = require('mongoose');
 const axios = require('axios');
 const CircuitBreaker = require('opossum');
 const Product = require('./models/Product');
+const { requireAuth, extractToken } = require('./middleware/auth');
+
+if (!process.env.JWT_SECRET) {
+  console.error('[product-service] FATAL: JWT_SECRET not set — copy .env.example to .env');
+  process.exit(1);
+}
 
 const app = express();
 const PORT = process.env.PORT || 3002;
@@ -20,11 +26,13 @@ app.use(express.json());
 // failure trips it while the inventory service is down), then stops
 // calling inventory entirely until resetTimeout elapses and the
 // breaker half-opens to probe recovery.
-const inventoryCall = async (productId) => {
+// `token` is the caller's JWT, forwarded on-behalf-of so inventory-service
+// can enforce auth on its internal create endpoint.
+const inventoryCall = async (productId, token) => {
   const res = await axios.post(
     `${INVENTORY_SERVICE_URL}/api/v1/inventory`,
     { productId },
-    { timeout: 3000 }
+    { timeout: 3000, headers: token ? { Authorization: `Bearer ${token}` } : {} }
   );
   return res.data;
 };
@@ -69,7 +77,7 @@ app.get('/health', (req, res) => {
 // Saves the product FIRST, then fires the inventory sync through the
 // circuit breaker. The response is 201 either way: if the breaker is
 // open inventorySync = { synced: false, message: "queued for retry" }.
-app.post('/api/v1/products', async (req, res, next) => {
+app.post('/api/v1/products', requireAuth, async (req, res, next) => {
   try {
     const { name, price } = req.body || {};
     if (typeof name !== 'string' || !name.trim() || typeof price !== 'number' || price < 0) {
@@ -78,7 +86,7 @@ app.post('/api/v1/products', async (req, res, next) => {
 
     const product = await Product.create(req.body);
 
-    const result = await breaker.fire(product._id.toString()).catch(() => ({
+    const result = await breaker.fire(product._id.toString(), extractToken(req)).catch(() => ({
       synced: false,
       message: 'queued for retry',
     }));
@@ -112,7 +120,7 @@ app.get('/api/v1/products/:id', async (req, res, next) => {
 });
 
 // ---------- PUT /api/v1/products/:id ----------
-app.put('/api/v1/products/:id', async (req, res, next) => {
+app.put('/api/v1/products/:id', requireAuth, async (req, res, next) => {
   try {
     if (!isValidId(req.params.id)) return res.status(404).json({ error: 'Product not found' });
     const product = await Product.findByIdAndUpdate(req.params.id, req.body, {
@@ -127,7 +135,7 @@ app.put('/api/v1/products/:id', async (req, res, next) => {
 });
 
 // ---------- DELETE /api/v1/products/:id ----------
-app.delete('/api/v1/products/:id', async (req, res, next) => {
+app.delete('/api/v1/products/:id', requireAuth, async (req, res, next) => {
   try {
     if (!isValidId(req.params.id)) return res.status(404).json({ error: 'Product not found' });
     const product = await Product.findByIdAndDelete(req.params.id);

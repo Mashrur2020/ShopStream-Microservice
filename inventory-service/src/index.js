@@ -1,6 +1,12 @@
 const express = require('express');
 const morgan = require('morgan');
 const { PrismaClient, Prisma } = require('@prisma/client');
+const { requireAuth } = require('./middleware/auth');
+
+if (!process.env.JWT_SECRET) {
+  console.error('[inventory-service] FATAL: JWT_SECRET not set — copy .env.example to .env');
+  process.exit(1);
+}
 
 const app = express();
 const PORT = process.env.PORT || 3004;
@@ -20,7 +26,8 @@ app.get('/health', (req, res) => {
 // ---------- POST /api/v1/inventory ----------
 // Idempotent: called by Product Service (possibly retried by the circuit
 // breaker). A duplicate call must not fail nor reset existing stock.
-app.post('/api/v1/inventory', async (req, res, next) => {
+// Auth: product-service forwards the creating user's JWT on-behalf-of.
+app.post('/api/v1/inventory', requireAuth, async (req, res, next) => {
   try {
     const { productId } = req.body || {};
     if (typeof productId !== 'string' || !productId.trim()) {
@@ -59,7 +66,7 @@ app.get('/api/v1/inventory/:productId', async (req, res, next) => {
 });
 
 // ---------- POST /api/v1/inventory/:productId/add ----------
-app.post('/api/v1/inventory/:productId/add', async (req, res, next) => {
+app.post('/api/v1/inventory/:productId/add', requireAuth, async (req, res, next) => {
   try {
     const { quantity } = req.body || {};
     if (!isPositiveInt(quantity)) {
@@ -89,7 +96,7 @@ app.post('/api/v1/inventory/:productId/add', async (req, res, next) => {
 //   WHERE productId = $p AND quantity >= $n
 // The guard + row lock in a single statement prevents overselling even
 // under concurrent orders (PostgreSQL serializes updates on the same row).
-app.put('/api/v1/inventory/:productId/deduct', async (req, res, next) => {
+app.put('/api/v1/inventory/:productId/deduct', requireAuth, async (req, res, next) => {
   try {
     const { quantity } = req.body || {};
     if (!isPositiveInt(quantity)) {

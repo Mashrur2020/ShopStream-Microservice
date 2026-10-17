@@ -1,6 +1,8 @@
 const express = require('express');
 const morgan = require('morgan');
 const { createProxyMiddleware } = require('http-proxy-middleware');
+const swaggerUi = require('swagger-ui-express');
+const openapiSpec = require('./openapi.json');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -51,10 +53,19 @@ app.get('/health', (req, res) => {
   res.json({ status: 'ok', service: 'api-gateway' });
 });
 
+// Interactive API docs (Swagger UI) for every service, served from the
+// single entry point: http://localhost:3000/api-docs
+app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(openapiSpec));
+
+// Raw OpenAPI spec for tooling (curl, codegen, linting)
+app.get('/openapi.json', (req, res) => {
+  res.json(openapiSpec);
+});
+
 app.use((req, res) => {
   res.status(404).json({ error: 'Not found' });
 });
 
 app.listen(PORT, () => {
-  console.log(`🚀 API Gateway running on port ${PORT}`);
+  console.log(`API Gateway running on port ${PORT}`);
 });

@@ -3,10 +3,16 @@ const morgan = require('morgan');
 const bcrypt = require('bcrypt');
 const jwt = require('jsonwebtoken');
 const { PrismaClient, Prisma } = require('@prisma/client');
+const { requireAuth, ownsResource } = require('./middleware/auth');
+
+if (!process.env.JWT_SECRET) {
+  console.error('[user-service] FATAL: JWT_SECRET not set — copy .env.example to .env');
+  process.exit(1);
+}
 
 const app = express();
 const PORT = process.env.PORT || 3001;
-const JWT_SECRET = process.env.JWT_SECRET || 'supersecretkey';
+const JWT_SECRET = process.env.JWT_SECRET;
 
 const prisma = new PrismaClient();
 
@@ -76,8 +82,13 @@ app.post('/api/v1/auth/login', async (req, res, next) => {
 });
 
 // ---------- GET /api/v1/users/:id ----------
-app.get('/api/v1/users/:id', async (req, res, next) => {
+// Profile lookup contains PII (email), so only the owner or an ADMIN may read it.
+app.get('/api/v1/users/:id', requireAuth, async (req, res, next) => {
   try {
+    if (!ownsResource(req.user, req.params.id)) {
+      return res.status(403).json({ error: 'Forbidden' });
+    }
+
     const user = await prisma.user.findUnique({
       where: { id: req.params.id },
       select: { id: true, email: true, name: true, role: true, createdAt: true },

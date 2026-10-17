@@ -10,6 +10,7 @@
   "dependencies": {
     "axios": "^1.20.0",
     "express": "^4.19.2",
+    "jsonwebtoken": "^9.0.2",
     "mongoose": "^8.24.5",
     "morgan": "^1.10.0",
     "opossum": "^10.0.0"

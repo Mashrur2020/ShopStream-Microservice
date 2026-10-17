@@ -1,6 +1,6 @@
 # ShopStream — E-commerce Microservices Architecture
 
-> A production-ready, event-driven e-commerce backend built with **Node.js**, **Express**, **PostgreSQL**, **MongoDB**, and **Docker**.
+> A production-ready microservices e-commerce backend built with **Node.js**, **Express**, **PostgreSQL**, **MongoDB**, and **Docker**.
 
 ---
 
@@ -32,7 +32,7 @@
 - **Polyglot persistence** — Different databases for different needs
 - **API Gateway pattern** — Single entry point for all clients
 - **Automated inventory sync** — Creating a product auto-creates inventory
-- **Resilience patterns** — Circuit breakers, retries, rollback
+- **Resilience patterns** — Circuit breaker with fallback, saga-style rollback
 - **Container orchestration** — Full Docker Compose setup
 
 ### Core Feature
@@ -44,58 +44,27 @@
 ## 2. System Architecture
 
 ```
-                                +-----------------------------------------------------------------------------------+
-                                |                                                                                   |
-                                |                             API GATEWAY LAYER                                     |
-                                |                                                                                   |
-+--------+                      |   +---------------------+       +---------------------------------------------+   |
-|        |                      |   |                     |       |  Express Gateway (Port 3000)                |   |
-| Client | ---------------------->  |  Nginx (Optional)   | ----> |                                             |   |
-| (Web/  |   HTTP Request       |   |  (Reverse Proxy)    |       |  Routes:                                    |   |
-| Mobile)|                      |   |                     |       |   /api/v1/users     -> USER-SERVICE         |   |
-+--------+                      |   +---------------------+       |   /api/v1/auth      -> USER-SERVICE         |   |
-                                |                                 |   /api/v1/products  -> PRODUCT-SERVICE      |   |
-                                |                                 |   /api/v1/orders    -> ORDER-SERVICE        |   |
-                                |                                 |   /api/v1/inventory -> INVENTORY-SERVICE    |   |
-                                |                                 +----------------------+----------------------+   |
-                                +--------------------------------------------------------|--------------------------+
-                                                                                         |
-                                                                                         | (Docker DNS)
-                                                                                         v
-+-----------------------------------------------------------------------------------+-----------------------------+
-|                                                                                                               |
-|                                        MICROSERVICES LAYER (Node.js + Express)                                |
-|                                                                                                               |
-|  +-----------------------+      +-----------------------+      +-----------------------+      +-----------------------+
-|  |   User Service        |      |   Product Service     |      |   Order Service       |      |  Inventory Service    |
-|  |   (Express + Prisma)  |      |   (Express + Mongoose)|      |   (Express + Mongoose)|      |  (Express + Prisma)   |
-|  |                       |      |                       |      |                       |      |                       |
-|  |  - bcrypt             |      |  - Product Schema     |      |  - Order Schema       |      |  - ACID Transactions  |
-|  |  - jsonwebtoken       |      |  - Axios Client       |      |  - Axios Client       |      |  - Opossum            |
-|  |  - Prisma Client      |      |  - Opossum            |      |  - Rollback Logic     |      |  - Prisma Client      |
-|  +----------+------------+      +----------+------------+      +----------+------------+      +----------+------------+
-|             |                              |                              |                              |
-|             | (1) Create Product           | (2) Auto-create Inventory    | (3) Check/Deduct Stock       |
-|             |                              |     via Axios                |     via Axios                |
-|             |                              +------------------------------>                              |
-|             |                                                             |                              |
-|             |                                                             +------------------------------>|
-|             |                                                                            (4) Confirm/Reject |
-|             |                                                             <------------------------------+
-+-------------|------------------------------|------------------------------|------------------------------|-------+
-              |                              |                              |                              |
-              v                              v                              v                              v
-+-----------------------------------------------------------------------------------+-----------------------------+
-|                                                                                                               |
-|                                          DATABASE LAYER (Polyglot Persistence)                                |
-|                                                                                                               |
-|  +-----------------------+      +-----------------------+      +-----------------------+      +-----------------------+
-|  |    PostgreSQL         |      |      MongoDB          |      |      MongoDB          |      |    PostgreSQL         |
-|  |                       |      |                       |      |                       |      |                       |
-|  |   - User Data         |      |   - Product Data      |      |   - Order Data        |      |  - Inventory Data     |
-|  |   - Auth Credentials  |      |   - Flexible Schema   |      |   - Order History     |      |  - Stock Levels       |
-|  |   - Roles/Permissions |      |   - Categories        |      |   - Order Items       |      |  - ACID Transactions  |
-|  +-----------------------+      +-----------------------+      +-----------------------+      +-----------------------+
+Client (Web / Mobile)
+   │  HTTP
+   v
+API Gateway — Express, port 3000
+   │  http-proxy-middleware: path-prefix routing · morgan request logs
+   │  /api/v1/auth|users -> user-service:3001
+   │  /api/v1/products   -> product-service:3002
+   │  /api/v1/orders     -> order-service:3003
+   │  /api/v1/inventory  -> inventory-service:3004
+   │  /api-docs (Swagger UI) · /openapi.json · /health
+   │
+   │  Docker DNS (shopstream-net) — one container per service
+   ├──► user-service       Express + Prisma + bcrypt + JWT   ──►  PostgreSQL  (user_service)
+   ├──► product-service    Express + Mongoose + Opossum CB   ──►  MongoDB     (productdb)
+   ├──► order-service      Express + Mongoose + Axios saga   ──►  MongoDB     (orderdb)
+   └──► inventory-service  Express + Prisma                  ──►  PostgreSQL  (inventory_service)
+
+Inter-service calls — synchronous HTTP via Axios; the caller's JWT is forwarded:
+   product-service ──(1) POST /api/v1/inventory ─────────────► inventory-service  (circuit breaker + fallback)
+   order-service   ──(2) PUT  /api/v1/inventory/:id/deduct ──► inventory-service  (atomic guarded UPDATE)
+   order-service   ──(3) POST /api/v1/inventory/:id/add ─────► inventory-service  (rollback compensation)
 ```
 
 ---
@@ -107,10 +76,11 @@
 | **Runtime** | Node.js 18 (Alpine) | JavaScript runtime |
 | **Framework** | Express.js 4 | HTTP server |
 | **API Gateway** | Express + `http-proxy-middleware` | Reverse proxy & routing |
+| **API Docs** | `swagger-ui-express` + OpenAPI 3 | Interactive Swagger UI at `/api-docs` |
 | **User DB** | PostgreSQL 15 | Relational, ACID-compliant |
 | **Product DB** | MongoDB 6 | Document store, flexible schema |
 | **Order DB** | MongoDB 6 | Document store, order history |
-| **Inventory DB** | PostgreSQL 15 | ACID transactions for stock |
+| **Inventory DB** | PostgreSQL 15 | Atomic conditional stock deduction |
 | **User ORM** | Prisma | Type-safe PostgreSQL access |
 | **Inventory ORM** | Prisma | Type-safe PostgreSQL access |
 | **Product ODM** | Mongoose | MongoDB schema validation |
@@ -142,7 +112,13 @@
 | `/api/v1/products/*` | product-service:3002 |
 | `/api/v1/orders/*` | order-service:3003 |
 | `/api/v1/inventory/*` | inventory-service:3004 |
+| `/api-docs` | Swagger UI (served locally from `openapi.json`) |
+| `/openapi.json` | Raw OpenAPI 3 spec (served locally) |
 | `/health` | Self |
+
+Targets default to the Docker DNS names above and can be overridden with
+`USER_SERVICE_URL`, `PRODUCT_SERVICE_URL`, `ORDER_SERVICE_URL` and
+`INVENTORY_SERVICE_URL`.
 
 **Why it exists:**
 - Single entry point for the client
@@ -192,7 +168,7 @@
 **Key Responsibilities:**
 - Create orders
 - Deduct stock via inventory-service (with rollback on failure)
-- Track order status (PENDING → CONFIRMED → SHIPPED → DELIVERED)
+- Track order status — orders are created as `CONFIRMED`; valid statuses: `PENDING`, `CONFIRMED`, `SHIPPED`, `DELIVERED`, `CANCELLED`
 
 ---
 
@@ -206,7 +182,7 @@
 
 **Key Responsibilities:**
 - Track stock per product
-- **Atomic stock deduction** (ACID transactions to prevent overselling)
+- **Atomic stock deduction** — a single guarded `UPDATE ... WHERE quantity >= n` prevents overselling under concurrency
 - Add stock (restock)
 
 ---
@@ -246,9 +222,9 @@ model Inventory {
 ```
 
 **Why PostgreSQL?**
-- **ACID transactions** are essential for stock deduction
-- Row-level locking prevents race conditions
-- `UPDATE ... WHERE quantity >= N` guarantees no overselling
+- **Atomicity** is essential for stock deduction
+- Deduction compiles to one guarded statement: `UPDATE "Inventory" SET quantity = quantity - $n WHERE productId = $p AND quantity >= $n`
+- PostgreSQL serializes concurrent updates on the same row, so check-and-deduct can never oversell
 
 ---
 
@@ -303,13 +279,28 @@ model Inventory {
 
 ## 6. API Endpoints
 
+> **Swagger UI:** [http://localhost:3000/api-docs](http://localhost:3000/api-docs)
+> renders every endpoint below from `api-gateway/openapi.json`, with
+> **Try it out** and an **Authorize** button for the JWT. The raw spec is at
+> `/openapi.json`. The curl snippets in §12 cover the same flows for scripting.
+
+All protected endpoints require a JWT from `POST /api/v1/auth/login`, sent as:
+
+```
+Authorization: Bearer <token>
+```
+
+Missing/invalid/expired token → `401`. Authenticated but not allowed (e.g. reading
+another user's data) → `403`. Public endpoints (catalog reads, health checks)
+need no token.
+
 ### 6.1 Auth & Users (`/api/v1/auth`, `/api/v1/users`)
 
 | Method | Endpoint | Description | Auth |
 | :--- | :--- | :--- | :--- |
 | POST | `/api/v1/auth/register` | Register new user | ❌ |
 | POST | `/api/v1/auth/login` | Login, returns JWT | ❌ |
-| GET | `/api/v1/users/:id` | Get user by ID | ❌ |
+| GET | `/api/v1/users/:id` | Get user by ID | ✅ owner or ADMIN |
 
 **Register Request:**
 ```json
@@ -332,13 +323,13 @@ model Inventory {
 
 ### 6.2 Products (`/api/v1/products`)
 
-| Method | Endpoint | Description |
-| :--- | :--- | :--- |
-| POST | `/api/v1/products` | Create product (auto-creates inventory) |
-| GET | `/api/v1/products` | List all products |
-| GET | `/api/v1/products/:id` | Get product by ID |
-| PUT | `/api/v1/products/:id` | Update product |
-| DELETE | `/api/v1/products/:id` | Delete product |
+| Method | Endpoint | Description | Auth |
+| :--- | :--- | :--- | :--- |
+| POST | `/api/v1/products` | Create product (auto-creates inventory) | ✅ |
+| GET | `/api/v1/products` | List all products | ❌ |
+| GET | `/api/v1/products/:id` | Get product by ID | ❌ |
+| PUT | `/api/v1/products/:id` | Update product | ✅ |
+| DELETE | `/api/v1/products/:id` | Delete product | ✅ |
 
 **Create Request:**
 ```json
@@ -358,13 +349,13 @@ model Inventory {
 
 ### 6.3 Orders (`/api/v1/orders`)
 
-| Method | Endpoint | Description |
-| :--- | :--- | :--- |
-| POST | `/api/v1/orders` | Create order (deducts stock) |
-| GET | `/api/v1/orders` | List all orders |
-| GET | `/api/v1/orders/:id` | Get order by ID |
-| GET | `/api/v1/orders/user/:userId` | Get user's orders |
-| PUT | `/api/v1/orders/:id/status` | Update order status |
+| Method | Endpoint | Description | Auth |
+| :--- | :--- | :--- | :--- |
+| POST | `/api/v1/orders` | Create order (deducts stock) | ✅ `userId` must match token |
+| GET | `/api/v1/orders` | List all orders | ✅ |
+| GET | `/api/v1/orders/:id` | Get order by ID | ✅ owner or ADMIN |
+| GET | `/api/v1/orders/user/:userId` | Get user's orders | ✅ owner or ADMIN |
+| PUT | `/api/v1/orders/:id/status` | Update order status | ✅ |
 
 **Create Request:**
 ```json
@@ -385,12 +376,12 @@ model Inventory {
 
 ### 6.4 Inventory (`/api/v1/inventory`)
 
-| Method | Endpoint | Description |
-| :--- | :--- | :--- |
-| POST | `/api/v1/inventory` | Create inventory record (called by Product Service) |
-| GET | `/api/v1/inventory/:productId` | Get stock for product |
-| POST | `/api/v1/inventory/:productId/add` | Add stock |
-| PUT | `/api/v1/inventory/:productId/deduct` | Deduct stock (atomic) |
+| Method | Endpoint | Description | Auth |
+| :--- | :--- | :--- | :--- |
+| POST | `/api/v1/inventory` | Create inventory record (called by Product Service) | ✅ forwarded user JWT |
+| GET | `/api/v1/inventory/:productId` | Get stock for product | ❌ |
+| POST | `/api/v1/inventory/:productId/add` | Add stock | ✅ |
+| PUT | `/api/v1/inventory/:productId/deduct` | Deduct stock (atomic) | ✅ forwarded user JWT |
 
 ---
 
@@ -404,6 +395,11 @@ model Inventory {
 | :--- | :--- | :--- | :--- |
 | Product Service | Inventory Service | Auto-create inventory | Circuit breaker + fallback |
 | Order Service | Inventory Service | Deduct stock | Try/catch + rollback |
+
+Both callers forward the **original user's JWT** (`Authorization: Bearer …`) to
+inventory-service, so every inventory mutation is authenticated end-to-end
+without a separate service account. On partial failure, order-service also calls
+`POST /api/v1/inventory/:productId/add` to compensate (saga rollback).
 
 ### Why Not Async (Message Queue)?
 
@@ -425,9 +421,11 @@ Client → Gateway → Product Service
                            └─ Inventory Service saves record with quantity: 0
 ```
 
-**If Inventory Service is down:**
-- Circuit breaker **opens** after 50% failures
-- Fallback returns `{ message: "queued for retry" }`
+On success, `inventorySync` contains the created inventory record. **If Inventory
+Service is down:**
+- Circuit breaker **opens** at a 50% failure rate (evaluated after a single call — `volumeThreshold: 1`)
+- Call timeout 3 s, reset timeout 10 s before half-opening to probe recovery
+- Fallback returns `{ synced: false, message: "queued for retry" }`
 - Product is still created ✅
 - Inventory sync can be retried later
 
@@ -459,15 +457,20 @@ If you deduct stock for 3 items and the 3rd fails, items 1 and 2 must be restore
 ## 9. Project Structure
 
 ```
-shopstream-node/
+ShopStream/
 ├── ARCHITECTURE.md               ← This file
+├── README.md
 ├── docker-compose.yml            ← Orchestration (dev & prod)
 ├── .env.example                  ← Sample env variables
+├── .gitignore
+├── scripts/
+│   └── smoke-test.sh             ← End-to-end auth + order-flow smoke test
 │
 ├── api-gateway/
 │   ├── Dockerfile
 │   ├── .dockerignore
 │   ├── package.json
+│   ├── openapi.json              ← OpenAPI 3 spec (served as Swagger UI)
 │   └── index.js
 │
 ├── user-service/
@@ -475,9 +478,12 @@ shopstream-node/
 │   ├── .dockerignore
 │   ├── package.json
 │   ├── prisma/
-│   │   └── schema.prisma
+│   │   ├── schema.prisma
+│   │   └── migrations/           ← Committed; applied on startup (migrate deploy)
 │   └── src/
-│       └── index.js
+│       ├── index.js
+│       └── middleware/
+│           └── auth.js           ← requireAuth / ownsResource / extractToken
 │
 ├── product-service/
 │   ├── Dockerfile
@@ -485,6 +491,8 @@ shopstream-node/
 │   ├── package.json
 │   └── src/
 │       ├── index.js
+│       ├── middleware/
+│       │   └── auth.js
 │       └── models/
 │           └── Product.js
 │
@@ -494,6 +502,8 @@ shopstream-node/
 │   ├── package.json
 │   └── src/
 │       ├── index.js
+│       ├── middleware/
+│       │   └── auth.js
 │       └── models/
 │           └── Order.js
 │
@@ -502,27 +512,36 @@ shopstream-node/
     ├── .dockerignore
     ├── package.json
     ├── prisma/
-    │   └── schema.prisma
+    │   ├── schema.prisma
+    │   └── migrations/
     └── src/
-        └── index.js
+        ├── index.js
+        └── middleware/
+            └── auth.js
 ```
 
 ---
 
 ## 10. Environment Variables
 
+Secrets (`POSTGRES_USER`, `POSTGRES_PASSWORD`, `JWT_SECRET`) live in an **untracked `.env`** at the repo root (see `.env.example`). `docker-compose.yml` reads them via `${VAR:?}` interpolation and fails fast if `.env` is missing; the services also refuse to start without `JWT_SECRET`.
+
 | Service | Variable | Description | Example |
 | :--- | :--- | :--- | :--- |
-| **user-service** | `DATABASE_URL` | PostgreSQL connection | `postgresql://admin:admin123@postgres:5432/shopstream?schema=user_service` |
-| | `JWT_SECRET` | Secret for signing JWTs | `supersecretkey` |
+| **api-gateway** | `USER_SERVICE_URL`, `PRODUCT_SERVICE_URL`, `ORDER_SERVICE_URL`, `INVENTORY_SERVICE_URL` | Optional proxy target overrides | defaults to the Docker DNS names (e.g. `http://user-service:3001`) |
+| **user-service** | `DATABASE_URL` | PostgreSQL connection (assembled from `POSTGRES_USER`/`POSTGRES_PASSWORD`) | `postgresql://<user>:<password>@postgres:5432/shopstream?schema=user_service` |
+| | `JWT_SECRET` | Secret for signing JWTs (from `.env`) | *(set in `.env`, never committed)* |
 | | `PORT` | Service port | `3001` |
 | **product-service** | `MONGO_URL` | MongoDB connection | `mongodb://mongodb:27017/productdb` |
 | | `INVENTORY_SERVICE_URL` | Inventory service base URL | `http://inventory-service:3004` |
+| | `JWT_SECRET` | Secret for verifying JWTs (must match user-service) | *(set in `.env`, never committed)* |
 | **order-service** | `MONGO_URL` | MongoDB connection | `mongodb://mongodb:27017/orderdb` |
 | | `INVENTORY_SERVICE_URL` | Inventory service base URL | `http://inventory-service:3004` |
-| **inventory-service** | `DATABASE_URL` | PostgreSQL connection | `postgresql://admin:admin123@postgres:5432/shopstream?schema=inventory_service` |
+| | `JWT_SECRET` | Secret for verifying JWTs (must match user-service) | *(set in `.env`, never committed)* |
+| **inventory-service** | `DATABASE_URL` | PostgreSQL connection (assembled from `POSTGRES_USER`/`POSTGRES_PASSWORD`) | `postgresql://<user>:<password>@postgres:5432/shopstream?schema=inventory_service` |
+| | `JWT_SECRET` | Secret for verifying JWTs (must match user-service) | *(set in `.env`, never committed)* |
 
-> ⚠️ **Never commit `.env` files.** Use `.env.example` as a template.
+> ⚠️ **Never commit `.env` files.** Use `.env.example` as a template: `cp .env.example .env`.
 
 ---
 
@@ -530,75 +549,64 @@ shopstream-node/
 
 ### Prerequisites
 
-- Docker Desktop (or Docker Engine + Compose)
-- Node.js 18+ (only for running `prisma migrate` locally)
-- Make (optional, for shortcuts)
+- Docker Desktop (or Docker Engine + Docker Compose v2)
+
+Node.js 18 is only needed if you want to run a service directly on the host.
 
 ### First-Time Setup
 
 ```bash
-# 1. Clone the repo
+# 1. Clone the repo + create local secrets
 git clone <your-repo-url>
-cd shopstream-node
+cd ShopStream
+cp .env.example .env        # then edit .env (set a real JWT_SECRET via openssl rand -hex 32)
 
-# 2. Start only Postgres (for migrations)
-docker-compose up -d postgres
+# 2. Build & start everything (databases + services + gateway)
+docker compose up --build -d
 
-# 3. Generate Prisma clients + run migrations
-cd user-service
-npm install
-DATABASE_URL="postgresql://admin:admin123@localhost:5432/shopstream?schema=user_service" \
-  npx prisma migrate dev --name init
-cd ..
-
-cd inventory-service
-npm install
-DATABASE_URL="postgresql://admin:admin123@localhost:5432/shopstream?schema=inventory_service" \
-  npx prisma migrate dev --name init
-cd ..
-
-# 4. Stop Postgres
-docker-compose down
-
-# 5. Start everything
-docker-compose up --build
+# 3. Verify the gateway
+curl http://localhost:3000/health
 ```
+
+Prisma migrations are committed in each service's `prisma/migrations/` and are
+applied automatically on container startup (`npx prisma migrate deploy` in the
+Dockerfiles) — no manual migration step is required.
 
 ### Expected Output
 
 ```
-shopstream-postgres   | database system is ready to accept connections
-shopstream-mongo      | Waiting for connections
-user-service          | 👤 User Service on port 3001
-product-service       | 📦 Product Service on port 3002
-order-service         | 🛒 Order Service on port 3003
-inventory-service     | 📊 Inventory Service on port 3004
-api-gateway           | 🚀 API Gateway running on port 3000
+shopstream-postgres          | database system is ready to accept connections
+shopstream-mongodb           | Waiting for connections
+shopstream-user-service      | 👤 User Service on port 3001
+shopstream-product-service   | 📦 Product Service on port 3002
+shopstream-order-service     | 🛒 Order Service on port 3003
+shopstream-inventory-service | 📊 Inventory Service on port 3004
+shopstream-api-gateway       | API Gateway running on port 3000
 ```
 
 ### Common Commands
 
 ```bash
 # Start everything
-docker-compose up -d
+docker compose up -d
 
 # View logs
-docker-compose logs -f
+docker compose logs -f
 
 # View logs for one service
-docker-compose logs -f product-service
+docker compose logs -f product-service
 
 # Rebuild a single service
-docker-compose up -d --build product-service
+docker compose up -d --build product-service
 
 # Stop (keep data)
-docker-compose down
+docker compose down
 
 # Stop + delete data
-docker-compose down -v
+docker compose down -v
 
 # Enter a container
-docker exec -it user-service sh
+docker exec -it shopstream-user-service sh
 
 # Check health of all services
 curl http://localhost:3000/health
@@ -612,6 +620,17 @@ curl http://localhost:3004/health
 
 ## 12. Testing the Workflows
 
+**Automated:** `./scripts/smoke-test.sh` runs every flow below (plus the
+401/403 auth checks) end-to-end and prints a PASS/FAIL summary.
+
+**Interactive:** open [Swagger UI](http://localhost:3000/api-docs), login via
+`POST /api/v1/auth/login`, click **Authorize** with the token, then use
+**Try it out** on any endpoint.
+
+> All steps below use the gateway (`:3000`). Protected endpoints need the JWT
+> from Test 1 — copy `token` and `user.id` from the login response into
+> `<TOKEN>` and `<USER_ID>`.
+
 ### Test 1: Register + Login
 
 ```bash
@@ -620,10 +639,18 @@ curl -X POST http://localhost:3000/api/v1/auth/register \
   -H "Content-Type: application/json" \
   -d '{"email":"john@test.com","password":"pass123","name":"John Doe"}'
 
-# Login
+# Login — save the returned token (for Authorization headers) and user.id
 curl -X POST http://localhost:3000/api/v1/auth/login \
   -H "Content-Type: application/json" \
   -d '{"email":"john@test.com","password":"pass123"}'
+```
+
+**No token → rejected:**
+```bash
+curl -X POST http://localhost:3000/api/v1/products \
+  -H "Content-Type: application/json" \
+  -d '{"name":"Nope","price":1}'
+# Expected: { "error": "Authentication required" }
 ```
 
 ---
@@ -633,6 +660,7 @@ curl -X POST http://localhost:3000/api/v1/auth/login \
 ```bash
 curl -X POST http://localhost:3000/api/v1/products \
   -H "Content-Type: application/json" \
+  -H "Authorization: Bearer <TOKEN>" \
   -d '{
     "name": "iPhone 15 Pro",
     "price": 999.99,
@@ -645,7 +673,7 @@ curl -X POST http://localhost:3000/api/v1/products \
 ```bash
 # Replace <PRODUCT_ID> with the _id from the response above
 curl http://localhost:3000/api/v1/inventory/<PRODUCT_ID>
-# Expected: { "productId": "...", "quantity": 0 }
+# Expected: { "inventory": { "productId": "...", "quantity": 0, ... } }
 ```
 
 ---
@@ -656,11 +684,13 @@ curl http://localhost:3000/api/v1/inventory/<PRODUCT_ID>
 # 1. Add stock
 curl -X POST http://localhost:3000/api/v1/inventory/<PRODUCT_ID>/add \
   -H "Content-Type: application/json" \
+  -H "Authorization: Bearer <TOKEN>" \
   -d '{"quantity": 50}'
 
-# 2. Place order
+# 2. Place order (userId MUST be the logged-in user's id)
 curl -X POST http://localhost:3000/api/v1/orders \
   -H "Content-Type: application/json" \
+  -H "Authorization: Bearer <TOKEN>" \
   -d '{
     "userId": "<USER_ID>",
     "items": [{
@@ -675,6 +705,9 @@ curl -X POST http://localhost:3000/api/v1/orders \
 curl http://localhost:3000/api/v1/inventory/<PRODUCT_ID>
 ```
 
+**Impersonation blocked:** the same request with someone else's `userId` →
+`403 { "error": "userId does not match authenticated user" }`.
+
 ---
 
 ### Test 4: Rollback on Insufficient Stock
@@ -683,10 +716,12 @@ curl http://localhost:3000/api/v1/inventory/<PRODUCT_ID>
 # Try to order 100 when only 48 exist
 curl -X POST http://localhost:3000/api/v1/orders \
   -H "Content-Type: application/json" \
+  -H "Authorization: Bearer <TOKEN>" \
   -d '{
     "userId": "<USER_ID>",
     "items": [{
       "productId": "<PRODUCT_ID>",
+      "productName": "iPhone 15 Pro",
       "quantity": 100,
       "price": 999.99
     }]
@@ -709,7 +744,7 @@ curl http://localhost:3000/api/v1/inventory/<PRODUCT_ID>
 | **Circuit Breaker** | Product → Inventory | Prevent cascading failures |
 | **Saga / Compensating Transaction** | Order Service | Rollback on partial failure |
 | **Repository Pattern** | Via Prisma/Mongoose | Data access abstraction |
-| **Dependency Injection** | Express middleware | Testability |
+| **Middleware Chain** | All services | Auth checks, JSON parsing, request logging |
 
 ---
 
@@ -718,14 +753,15 @@ curl http://localhost:3000/api/v1/inventory/<PRODUCT_ID>
 ### Implemented
 
 - ✅ **Password hashing** with bcrypt (10 rounds)
-- ✅ **JWT** for stateless auth
+- ✅ **JWT** for stateless auth (issued by user-service, 24h expiry)
+- ✅ **JWT validation middleware** on every mutation + private read in all 4 services (`401` missing/invalid, `403` wrong owner)
+- ✅ **Ownership checks** — user profiles and single-order reads are restricted to the owner or an ADMIN; order `userId` must match the token (`GET /orders` is not yet scoped — see §15)
+- ✅ **Service-to-service forwarding** — product/order services pass the caller's JWT to inventory
 - ✅ **Non-root user** in Docker containers
-- ✅ **Secrets via env vars** (should migrate to Docker secrets in prod)
+- ✅ **Secrets via untracked `.env`** — compose uses `${VAR:?}` interpolation, services fail fast without `JWT_SECRET` (still migrate to Docker secrets in prod)
 - ✅ **Input validation** on critical endpoints
 
 ### Recommended for Production
-
-- ⚠️ Add **JWT middleware** to protect admin routes
 - ⚠️ Add **rate limiting** (`express-rate-limit`) on the gateway
 - ⚠️ Add **Helmet** for HTTP security headers
 - ⚠️ Add **CORS** configuration
@@ -747,12 +783,13 @@ curl http://localhost:3000/api/v1/inventory/<PRODUCT_ID>
 | **No event bus** | Tight coupling between Product & Inventory | Use event-driven architecture |
 | **Rollback can fail** | If order-service crashes mid-rollback, data is inconsistent | Use outbox pattern + retries |
 | **No API versioning strategy** | Breaking changes affect all clients | Add `/v2` support + deprecation policy |
-| **JWT not validated on all routes** | Unauthenticated product creation possible | Add JWT middleware |
+| **No role-based authorization** | Any authenticated user can edit any product / change any order's status / restock any product | Add `requireAdmin` middleware + admin seeding |
+| **Order list is not scoped** | `GET /api/v1/orders` returns every user's orders to any authenticated caller | Filter by `req.user.id` unless ADMIN |
 
 ### Roadmap
 
 #### Phase 1 — Hardening (Next)
-- [ ] Add JWT middleware for protected routes
+- [x] Add JWT middleware for protected routes
 - [ ] Add request validation (Zod)
 - [ ] Add integration tests (Jest + Supertest)
 - [ ] Add E2E tests (Playwright)
@@ -789,5 +826,5 @@ curl http://localhost:3000/api/v1/inventory/<PRODUCT_ID>
 ---
 
 **Maintainer:** [Your Name]
-**Last Updated:** 2026-10-09
+**Last Updated:** 2026-10-17
 **Version:** 1.0.0

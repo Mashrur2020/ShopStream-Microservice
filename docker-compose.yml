@@ -15,8 +15,8 @@ services:
     container_name: shopstream-postgres
     restart: unless-stopped
     environment:
-      POSTGRES_USER: admin
-      POSTGRES_PASSWORD: admin123
+      POSTGRES_USER: ${POSTGRES_USER:?POSTGRES_USER missing - copy .env.example to .env}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD missing - copy .env.example to .env}
       POSTGRES_DB: shopstream
     ports:
       - "5432:5432"
@@ -69,8 +69,8 @@ services:
     environment:
       NODE_ENV: production
       PORT: 3001
-      DATABASE_URL: postgresql://admin:admin123@postgres:5432/shopstream?schema=user_service
-      JWT_SECRET: supersecretkey-change-in-production
+      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/shopstream?schema=user_service
+      JWT_SECRET: ${JWT_SECRET:?JWT_SECRET missing - copy .env.example to .env}
     networks:
       - shopstream-net
 
@@ -93,6 +93,7 @@ services:
       PORT: 3002
       MONGO_URL: mongodb://mongodb:27017/productdb
       INVENTORY_SERVICE_URL: http://inventory-service:3004
+      JWT_SECRET: ${JWT_SECRET:?JWT_SECRET missing - copy .env.example to .env}
     networks:
       - shopstream-net
 
@@ -115,6 +116,7 @@ services:
       PORT: 3003
       MONGO_URL: mongodb://mongodb:27017/orderdb
       INVENTORY_SERVICE_URL: http://inventory-service:3004
+      JWT_SECRET: ${JWT_SECRET:?JWT_SECRET missing - copy .env.example to .env}
     networks:
       - shopstream-net
 
@@ -133,7 +135,8 @@ services:
     environment:
       NODE_ENV: production
       PORT: 3004
-      DATABASE_URL: postgresql://admin:admin123@postgres:5432/shopstream?schema=inventory_service
+      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/shopstream?schema=inventory_service
+      JWT_SECRET: ${JWT_SECRET:?JWT_SECRET missing - copy .env.example to .env}
     networks:
       - shopstream-net
 

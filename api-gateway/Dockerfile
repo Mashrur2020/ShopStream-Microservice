@@ -8,6 +8,7 @@ RUN npm install --omit=dev
 
 # App source
 COPY index.js ./
+COPY openapi.json ./
 
 # Non-root
 USER node
